@@ -8,9 +8,7 @@ from app.services.json_service.entity_extractor.detect_relationships import dete
 from app.services.json_service.normalizer.normalize_schema import normalize_entities
 from app.services.json_service.table_generator.sql_generator import generate_create_table
 from app.services.json_service.table_generator.nosql_generator import to_mongo_validator
-from app.services.json_service.schema_checker.compare_schema import compare_table_schema
-from app.services.json_service.schema_checker.alter_generator import generate_alter_statements
-from app.services.json_service.schema_checker.versioner import next_version_name
+from app.services.json_service.query_generator import QueryGenerator
 from app.db.postgres.client import PostgresClient
 from app.db.mongo.client import MongoClient
 
@@ -31,7 +29,7 @@ class JsonProcessor:
     def process(self, file_bytes: bytes) -> Dict[str, Any]:
         """
         Process JSON file using YOUR SQL/NoSQL classification algorithm
-        Then generate and apply schemas to databases
+        Then generate schemas, insert data, and return DB credentials
         """
         try:
             data = json.loads(file_bytes.decode('utf-8'))
@@ -44,22 +42,12 @@ class JsonProcessor:
             relationships = detect_relationships(entities)
             normalized = normalize_entities(entities, self.infer_fn)
 
-            results = {
-                'schema_type': schema_type,
-                'sql': {},
-                'nosql': {},
-                'actions': []
-            }
-
             if schema_type == 'sql':
-                # Step 3a: Generate and apply SQL schemas
-                results = self._process_sql_schema(normalized, relationships, results)
+                # Step 3a: Process SQL - create tables and insert data
+                return self._process_sql_complete(data, entities, normalized, relationships)
             else:
-                # Step 3b: Generate and apply NoSQL schemas
-                results = self._process_nosql_schema(normalized, results)
-
-            results['status'] = 'success'
-            return results
+                # Step 3b: Process NoSQL - create collections and insert data
+                return self._process_nosql_complete(data, entities, normalized)
 
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON: {str(e)}")
@@ -148,73 +136,144 @@ class JsonProcessor:
 
         return decision
     
-    def _process_sql_schema(self, normalized, relationships, results):
-        """Process SQL schema generation and application"""
-        existing_tables = self.pg.list_tables()
-        
-        for entity_name, schema in normalized.items():
-            # Generate CREATE TABLE DDL
-            ddl = generate_create_table(entity_name, schema, relationships)
-            results['sql'][entity_name] = ddl
-            
-            if entity_name in existing_tables:
-                # Table exists - check for schema changes
-                existing_cols = self.pg.fetch_table_columns(entity_name)
-                gen_cols = {}
-                for k, v in schema.get('properties', {}).items():
-                    t = v.get('type')
-                    gen_cols[k] = t
-                
-                cmp = compare_table_schema(existing_cols, gen_cols)
-                
-                if cmp['compatible'] and cmp['add_columns']:
-                    # Add new columns with ALTER
-                    stmts = generate_alter_statements(entity_name, {c: 'TEXT' for c in cmp['add_columns']})
-                    for s in stmts:
-                        self.pg.execute(s)
-                    results['actions'].append({
-                        'table': entity_name,
-                        'action': 'alter',
-                        'stmts': stmts
-                    })
-                elif not cmp['compatible']:
-                    # Incompatible changes - create versioned table
-                    newname = next_version_name(entity_name, existing_tables)
-                    ddl_v = ddl.replace(f'"{entity_name}"', f'"{newname}"')
-                    self.pg.execute(ddl_v)
-                    results['actions'].append({
-                        'table': newname,
-                        'action': 'create_version',
-                        'ddl': ddl_v
-                    })
-                else:
-                    results['actions'].append({
-                        'table': entity_name,
-                        'action': 'noop'
-                    })
-            else:
-                # New table - create it
-                self.pg.execute(ddl)
-                results['actions'].append({
-                    'table': entity_name,
-                    'action': 'create',
-                    'ddl': ddl
-                })
-        
-        return results
+
     
-    def _process_nosql_schema(self, normalized, results):
-        """Process NoSQL schema generation and application"""
+    def _insert_data_to_table(self, table_name: str, schema: Dict[str, Any], data: Any) -> int:
+        """
+        Insert data into PostgreSQL table using QueryGenerator
+        Returns: number of rows inserted
+        """
+        rows_inserted = 0
+        
+        if isinstance(data, list):
+            # Array of objects - insert each
+            for row in data:
+                if isinstance(row, dict):
+                    query, values = QueryGenerator.generate_sql_insert(table_name, schema, row)
+                    if query:
+                        try:
+                            self.pg.execute(query, values)
+                            rows_inserted += 1
+                        except Exception as e:
+                            print(f"Insert error for {table_name}: {e}")
+        elif isinstance(data, dict):
+            # Single object - insert once
+            query, values = QueryGenerator.generate_sql_insert(table_name, schema, data)
+            if query:
+                try:
+                    self.pg.execute(query, values)
+                    rows_inserted = 1
+                except Exception as e:
+                    print(f"Insert error for {table_name}: {e}")
+        
+        return rows_inserted
+    
+
+    
+    def _process_sql_complete(self, original_data: Any, entities: Dict, normalized: Dict, relationships: list) -> Dict[str, Any]:
+        """
+        Complete SQL processing: create tables, insert data, return table info (NO credentials)
+        """
+        existing_tables = self.pg.list_tables()
+        tables_info = []
+        
         for entity_name, schema in normalized.items():
-            # Generate MongoDB validator
+            # Generate and execute CREATE TABLE
+            ddl = generate_create_table(entity_name, schema, relationships)
+            
+            table_used = entity_name
+            if entity_name not in existing_tables:
+                self.pg.execute(ddl)
+            
+            # Insert data into table
+            entity_data = entities.get(entity_name, {})
+            rows_inserted = self._insert_data_to_table(table_used, schema, entity_data)
+            
+            # Extract field information
+            fields = []
+            for field_name, field_info in schema.get('properties', {}).items():
+                field_type = field_info.get('type', 'string')
+                fields.append({
+                    'name': field_name,
+                    'type': field_type,
+                    'required': field_name in schema.get('required', [])
+                })
+            
+            tables_info.append({
+                'table_name': table_used,
+                'fields': fields,
+                'rows_inserted': rows_inserted
+            })
+        
+        # Return only table info (NO database credentials)
+        return {
+            'schema_type': 'sql',
+            'tables': tables_info,
+            'status': 'success'
+        }
+    
+
+    
+    def _insert_data_to_collection(self, collection_name: str, schema: Dict[str, Any], data: Any) -> int:
+        """
+        Insert data into MongoDB collection using QueryGenerator
+        Returns: number of documents inserted
+        """
+        docs_inserted = 0
+        collection = self.mongo.get_collection(collection_name)
+        
+        try:
+            if isinstance(data, list):
+                # Array of documents - prepare and insert
+                documents = QueryGenerator.prepare_mongodb_batch(schema, data)
+                if documents:
+                    result = collection.insert_many(documents)
+                    docs_inserted = len(result.inserted_ids)
+            elif isinstance(data, dict):
+                # Single document - prepare and insert
+                document = QueryGenerator.prepare_mongodb_document(schema, data)
+                if document:
+                    result = collection.insert_one(document)
+                    docs_inserted = 1
+        except Exception as e:
+            print(f"MongoDB insert error for {collection_name}: {e}")
+        
+        return docs_inserted
+    
+    def _process_nosql_complete(self, original_data: Any, entities: Dict, normalized: Dict) -> Dict[str, Any]:
+        """
+        Complete NoSQL processing: create collections, insert data, return collection info
+        """
+        collections_info = []
+        
+        for entity_name, schema in normalized.items():
+            # Generate and apply MongoDB validator
             validator = to_mongo_validator(schema)
             self.mongo.create_validator(entity_name, validator)
             
-            results['nosql'][entity_name] = validator
-            results['actions'].append({
-                'collection': entity_name,
-                'action': 'validator_applied',
-                'validator': validator
+            # Insert data into collection
+            entity_data = entities.get(entity_name, {})
+            docs_inserted = self._insert_data_to_collection(entity_name, schema, entity_data)
+            
+            # Extract field information
+            fields = []
+            for field_name, field_info in schema.get('properties', {}).items():
+                field_type = field_info.get('type', 'string')
+                fields.append({
+                    'name': field_name,
+                    'type': field_type,
+                    'required': field_name in schema.get('required', [])
+                })
+            
+            collections_info.append({
+                'collection_name': entity_name,
+                'fields': fields,
+                'documents_inserted': docs_inserted
             })
         
-        return results
+        # Return only collection info (no credentials)
+        return {
+            'schema_type': 'nosql',
+            'collections': collections_info,
+            'status': 'success'
+        }

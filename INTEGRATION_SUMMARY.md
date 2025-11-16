@@ -16,6 +16,13 @@ A comprehensive FastAPI backend that intelligently processes and stores files wi
 - ✅ **Schema Evolution**: ALTER TABLE for compatible changes
 - ✅ **Versioning**: Creates `table_v2` for breaking changes
 
+### 2.5 **Query Generation Module** (Standalone)
+- ✅ **SQL Operations**: INSERT, UPDATE, SELECT, DELETE with parameterized queries
+- ✅ **Batch Operations**: Efficient bulk inserts for multiple rows
+- ✅ **MongoDB Operations**: Document preparation and query generation
+- ✅ **Type Safety**: Automatic type conversion based on schema
+- ✅ **Modular Design**: Reusable across different services
+
 ### 3. **Organized Media Storage**
 - ✅ **User-based folders**: `users/{user_id}/`
 - ✅ **Category folders**: `images/`, `documents/`, `audio/`, `video/`, `archives/`
@@ -42,6 +49,7 @@ multi-modal-storage-system/
 │   ├── services/
 │   │   ├── json_service/
 │   │   │   ├── processor.py     # 🌟 Main processor with YOUR algorithm
+│   │   │   ├── query_generator.py # 🔧 Query generation module (CRUD operations)
 │   │   │   ├── infer_type/      # Type inference (UUID, datetime, email)
 │   │   │   │   ├── primitive.py
 │   │   │   │   ├── infer_array.py
