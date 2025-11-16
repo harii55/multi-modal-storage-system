@@ -47,6 +47,30 @@ class MongoClient:
         collection = self.get_collection(collection_name)
         return collection.delete_one(query)
     
+    def create_validator(self, collection_name, validator):
+        """Create or update collection validator for schema validation"""
+        try:
+            # Try to create collection
+            self.db.create_collection(collection_name)
+        except Exception:
+            # Collection already exists
+            pass
+        
+        try:
+            # Apply validator
+            cmd = {
+                'collMod': collection_name,
+                'validator': validator,
+                'validationLevel': 'moderate'
+            }
+            self.db.command(cmd)
+        except Exception:
+            # Try creating with validator option on create
+            try:
+                self.db.create_collection(collection_name, validator=validator)
+            except Exception:
+                pass
+    
     def close(self):
         """Close the connection"""
         self.client.close()

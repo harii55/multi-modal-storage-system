@@ -1,33 +1,65 @@
 import json
 from typing import Dict, Any
+from app.services.json_service.infer_type.primitive import infer_primitive
+from app.services.json_service.infer_type.infer_object import infer_object
+from app.services.json_service.infer_type.infer_array import infer_array
+from app.services.json_service.entity_extractor.detect_entities import detect_entities_from_json
+from app.services.json_service.entity_extractor.detect_relationships import detect_relationships
+from app.services.json_service.normalizer.normalize_schema import normalize_entities
+from app.services.json_service.table_generator.sql_generator import generate_create_table
+from app.services.json_service.table_generator.nosql_generator import to_mongo_validator
+from app.services.json_service.schema_checker.compare_schema import compare_table_schema
+from app.services.json_service.schema_checker.alter_generator import generate_alter_statements
+from app.services.json_service.schema_checker.versioner import next_version_name
+from app.db.postgres.client import PostgresClient
+from app.db.mongo.client import MongoClient
 
 class JsonProcessor:
+    def __init__(self):
+        self.pg = PostgresClient()
+        self.mongo = MongoClient()
+    
+    def infer_fn(self, value):
+        """Type inference function for recursive schema detection"""
+        if isinstance(value, dict):
+            return ('object', infer_object(value, self.infer_fn))
+        if isinstance(value, list):
+            return ('array', infer_array(value, self.infer_fn))
+        t, m = infer_primitive(value)
+        return (t, m)
+    
     def process(self, file_bytes: bytes) -> Dict[str, Any]:
         """
-        Process JSON file and determine if schema is SQL or NOSQL
-        Returns processing result
+        Process JSON file using YOUR SQL/NoSQL classification algorithm
+        Then generate and apply schemas to databases
         """
         try:
             data = json.loads(file_bytes.decode('utf-8'))
 
-            # Determine schema type (SQL vs NOSQL)
+            # Step 1: Use YOUR algorithm to classify SQL vs NOSQL
             schema_type = self._detect_schema_type(data)
 
+            # Step 2: Extract entities and relationships
+            entities = detect_entities_from_json(data)
+            relationships = detect_relationships(entities)
+            normalized = normalize_entities(entities, self.infer_fn)
+
+            results = {
+                'schema_type': schema_type,
+                'sql': {},
+                'nosql': {},
+                'actions': []
+            }
+
             if schema_type == 'sql':
-                # TODO: Create services and write to DB
-                # This will be implemented later
-                return {
-                    'schema_type': 'sql',
-                    'status': 'pending',
-                    'message': 'SQL schema detected - services creation pending'
-                }
+                # Step 3a: Generate and apply SQL schemas
+                results = self._process_sql_schema(normalized, relationships, results)
             else:
-                # Handle NOSQL case
-                return {
-                    'schema_type': 'nosql',
-                    'status': 'processed',
-                    'data': data
-                }
+                # Step 3b: Generate and apply NoSQL schemas
+                results = self._process_nosql_schema(normalized, results)
+
+            results['status'] = 'success'
+            return results
 
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON: {str(e)}")
@@ -115,3 +147,74 @@ class JsonProcessor:
         decision = "NoSQL" if total_score >= threshold else "SQL"
 
         return decision
+    
+    def _process_sql_schema(self, normalized, relationships, results):
+        """Process SQL schema generation and application"""
+        existing_tables = self.pg.list_tables()
+        
+        for entity_name, schema in normalized.items():
+            # Generate CREATE TABLE DDL
+            ddl = generate_create_table(entity_name, schema, relationships)
+            results['sql'][entity_name] = ddl
+            
+            if entity_name in existing_tables:
+                # Table exists - check for schema changes
+                existing_cols = self.pg.fetch_table_columns(entity_name)
+                gen_cols = {}
+                for k, v in schema.get('properties', {}).items():
+                    t = v.get('type')
+                    gen_cols[k] = t
+                
+                cmp = compare_table_schema(existing_cols, gen_cols)
+                
+                if cmp['compatible'] and cmp['add_columns']:
+                    # Add new columns with ALTER
+                    stmts = generate_alter_statements(entity_name, {c: 'TEXT' for c in cmp['add_columns']})
+                    for s in stmts:
+                        self.pg.execute(s)
+                    results['actions'].append({
+                        'table': entity_name,
+                        'action': 'alter',
+                        'stmts': stmts
+                    })
+                elif not cmp['compatible']:
+                    # Incompatible changes - create versioned table
+                    newname = next_version_name(entity_name, existing_tables)
+                    ddl_v = ddl.replace(f'"{entity_name}"', f'"{newname}"')
+                    self.pg.execute(ddl_v)
+                    results['actions'].append({
+                        'table': newname,
+                        'action': 'create_version',
+                        'ddl': ddl_v
+                    })
+                else:
+                    results['actions'].append({
+                        'table': entity_name,
+                        'action': 'noop'
+                    })
+            else:
+                # New table - create it
+                self.pg.execute(ddl)
+                results['actions'].append({
+                    'table': entity_name,
+                    'action': 'create',
+                    'ddl': ddl
+                })
+        
+        return results
+    
+    def _process_nosql_schema(self, normalized, results):
+        """Process NoSQL schema generation and application"""
+        for entity_name, schema in normalized.items():
+            # Generate MongoDB validator
+            validator = to_mongo_validator(schema)
+            self.mongo.create_validator(entity_name, validator)
+            
+            results['nosql'][entity_name] = validator
+            results['actions'].append({
+                'collection': entity_name,
+                'action': 'validator_applied',
+                'validator': validator
+            })
+        
+        return results

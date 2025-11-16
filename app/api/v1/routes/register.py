@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
 from uuid import uuid4
 from datetime import datetime
-from app.services.db_service.postgres.client import PostgresClient
+from app.db.postgres.client import PostgresClient
 from passlib.context import CryptContext
 
 router = APIRouter()
@@ -16,7 +16,10 @@ class RegisterRequest(BaseModel):
 @router.post("/register")
 async def register_user(payload: RegisterRequest):
     db = PostgresClient()
-    existing = db.fetch_one("SELECT * FROM users WHERE email_id=%s", (payload.email,))
+    # Ensure base schema exists
+    db.ensure_base_schema()
+    
+    existing = db.fetch_one("SELECT user_id FROM users WHERE email_id=%s", (payload.email,))
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
