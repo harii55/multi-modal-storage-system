@@ -67,7 +67,7 @@ class QueryGenerator:
         return queries
     
     @staticmethod
-    def generate_update_query(table_name: str, schema: Dict[str, Any], data_row: Dict[str, Any], where_clause: str) -> Tuple[Optional[str], Optional[tuple]]:
+    def generate_update_query(table_name: str, schema: Dict[str, Any], data_row: Dict[str, Any], where_conditions: Dict[str, Any]) -> Tuple[Optional[str], Optional[tuple]]:
         """
         Generate UPDATE query for PostgreSQL
         
@@ -75,14 +75,14 @@ class QueryGenerator:
             table_name: Name of the target table
             schema: Schema dictionary
             data_row: Data to update
-            where_clause: WHERE condition (e.g., 'id = %s')
+            where_conditions: Dictionary of WHERE conditions (e.g., {'id': '123'})
         
         Returns:
             Tuple of (query_string, values_tuple)
         
         Example:
-            query, values = generate_update_query('users', schema, {'name': 'Jane'}, 'id = %s')
-            # Returns: ("UPDATE "users" SET "name" = %s WHERE id = %s", ('Jane',))
+            query, values = generate_update_query('users', schema, {'name': 'Jane'}, {'id': '123'})
+            # Returns: ('UPDATE "users" SET "name" = %s WHERE "id" = %s', ('Jane', '123'))
         """
         set_clauses = []
         values = []
@@ -97,17 +97,23 @@ class QueryGenerator:
         if not set_clauses:
             return None, None
         
-        query = f'UPDATE "{table_name}" SET {", ".join(set_clauses)} WHERE {where_clause}'
+        # Build WHERE clause from conditions dictionary
+        where_clauses = []
+        for col, val in where_conditions.items():
+            where_clauses.append(f'"{col}" = %s')
+            values.append(val)
+        
+        query = f'UPDATE "{table_name}" SET {", ".join(set_clauses)} WHERE {" AND ".join(where_clauses)}'
         return query, tuple(values)
     
     @staticmethod
-    def generate_select_query(table_name: str, schema: Dict[str, Any], where_conditions: Optional[Dict[str, Any]] = None, limit: Optional[int] = None) -> Tuple[str, tuple]:
+    def generate_select_query(table_name: str, columns: Optional[List[str]] = None, where_conditions: Optional[Dict[str, Any]] = None, limit: Optional[int] = None) -> Tuple[str, tuple]:
         """
         Generate SELECT query for PostgreSQL
         
         Args:
             table_name: Name of the target table
-            schema: Schema dictionary
+            columns: List of columns to select (None means SELECT *)
             where_conditions: Dictionary of column: value conditions
             limit: Optional row limit
         
@@ -115,10 +121,15 @@ class QueryGenerator:
             Tuple of (query_string, values_tuple)
         
         Example:
-            query, values = generate_select_query('users', schema, {'age': 30}, limit=10)
-            # Returns: ('SELECT * FROM "users" WHERE "age" = %s LIMIT 10', (30,))
+            query, values = generate_select_query('users', ['id', 'name'], {'age': 30}, limit=10)
+            # Returns: ('SELECT "id", "name" FROM "users" WHERE "age" = %s LIMIT 10', (30,))
         """
-        query = f'SELECT * FROM "{table_name}"'
+        if columns:
+            cols = ', '.join([f'"{col}"' for col in columns])
+            query = f'SELECT {cols} FROM "{table_name}"'
+        else:
+            query = f'SELECT * FROM "{table_name}"'
+        
         values = []
         
         if where_conditions:

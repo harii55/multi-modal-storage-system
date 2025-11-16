@@ -26,10 +26,14 @@ class JsonProcessor:
         t, m = infer_primitive(value)
         return (t, m)
     
-    def process(self, file_bytes: bytes) -> Dict[str, Any]:
+    def process(self, file_bytes: bytes, user_id: str = 'anonymous') -> Dict[str, Any]:
         """
         Process JSON file using YOUR SQL/NoSQL classification algorithm
         Then generate schemas, insert data, and return DB credentials
+        
+        Args:
+            file_bytes: JSON file content
+            user_id: User identifier (used as collection name for NoSQL)
         """
         try:
             data = json.loads(file_bytes.decode('utf-8'))
@@ -46,8 +50,8 @@ class JsonProcessor:
                 # Step 3a: Process SQL - create tables and insert data
                 return self._process_sql_complete(data, entities, normalized, relationships)
             else:
-                # Step 3b: Process NoSQL - create collections and insert data
-                return self._process_nosql_complete(data, entities, normalized)
+                # Step 3b: Process NoSQL - create collections and insert data (use user_id as collection name)
+                return self._process_nosql_complete(data, entities, normalized, user_id)
 
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON: {str(e)}")
@@ -172,10 +176,11 @@ class JsonProcessor:
     
     def _process_sql_complete(self, original_data: Any, entities: Dict, normalized: Dict, relationships: list) -> Dict[str, Any]:
         """
-        Complete SQL processing: create tables, insert data, return table info (NO credentials)
+        Complete SQL processing: create tables, insert data, return table info with sample queries
         """
         existing_tables = self.pg.list_tables()
         tables_info = []
+        all_queries = []
         
         for entity_name, schema in normalized.items():
             # Generate and execute CREATE TABLE
@@ -199,16 +204,62 @@ class JsonProcessor:
                     'required': field_name in schema.get('required', [])
                 })
             
+            # Generate sample queries (1-3 queries per table)
+            sample_data = entity_data if isinstance(entity_data, dict) else (entity_data[0] if isinstance(entity_data, list) and entity_data else {})
+            
+            if sample_data:
+                # 1. INSERT query
+                insert_query, insert_values = QueryGenerator.generate_sql_insert(table_used, schema, sample_data)
+                if insert_query:
+                    all_queries.append({
+                        'type': 'INSERT',
+                        'table': table_used,
+                        'query': insert_query,
+                        'sample_values': list(insert_values)
+                    })
+                
+                # 2. SELECT query
+                columns = list(schema.get('properties', {}).keys())[:5]  # First 5 columns
+                select_query, _ = QueryGenerator.generate_select_query(table_used, columns, limit=10)
+                if select_query:
+                    all_queries.append({
+                        'type': 'SELECT',
+                        'table': table_used,
+                        'query': select_query
+                    })
+                
+                # 3. UPDATE query (if there's a primary key or id field)
+                pk_field = None
+                for field in ['id', 'uuid', list(schema.get('properties', {}).keys())[0] if schema.get('properties', {}) else None]:
+                    if field and field in schema.get('properties', {}):
+                        pk_field = field
+                        break
+                
+                if pk_field and pk_field in sample_data:
+                    update_data = {k: v for k, v in list(sample_data.items())[:2] if k != pk_field}
+                    if update_data:
+                        update_query, update_values = QueryGenerator.generate_update_query(
+                            table_used, schema, update_data, {pk_field: sample_data[pk_field]}
+                        )
+                        if update_query:
+                            all_queries.append({
+                                'type': 'UPDATE',
+                                'table': table_used,
+                                'query': update_query,
+                                'sample_values': list(update_values)
+                            })
+            
             tables_info.append({
                 'table_name': table_used,
                 'fields': fields,
                 'rows_inserted': rows_inserted
             })
         
-        # Return only table info (NO database credentials)
+        # Return table info with sample queries (limit to first 3 queries)
         return {
             'schema_type': 'sql',
             'tables': tables_info,
+            'queries': all_queries[:3],
             'status': 'success'
         }
     
@@ -240,40 +291,96 @@ class JsonProcessor:
         
         return docs_inserted
     
-    def _process_nosql_complete(self, original_data: Any, entities: Dict, normalized: Dict) -> Dict[str, Any]:
+    def _process_nosql_complete(self, original_data: Any, entities: Dict, normalized: Dict, user_id: str) -> Dict[str, Any]:
         """
-        Complete NoSQL processing: create collections, insert data, return collection info
-        """
-        collections_info = []
+        Complete NoSQL processing: create user-specific collection, insert data, return collection info with sample queries
         
-        for entity_name, schema in normalized.items():
-            # Generate and apply MongoDB validator
-            validator = to_mongo_validator(schema)
-            self.mongo.create_validator(entity_name, validator)
-            
-            # Insert data into collection
-            entity_data = entities.get(entity_name, {})
-            docs_inserted = self._insert_data_to_collection(entity_name, schema, entity_data)
-            
-            # Extract field information
-            fields = []
-            for field_name, field_info in schema.get('properties', {}).items():
-                field_type = field_info.get('type', 'string')
-                fields.append({
-                    'name': field_name,
-                    'type': field_type,
-                    'required': field_name in schema.get('required', [])
-                })
-            
-            collections_info.append({
-                'collection_name': entity_name,
-                'fields': fields,
-                'documents_inserted': docs_inserted
+        Args:
+            original_data: Original JSON data
+            entities: Detected entities
+            normalized: Normalized schemas
+            user_id: User identifier to use as collection name
+        """
+        # Use user_id as collection name (one collection per user)
+        collection_name = user_id
+        
+        # Get the root entity schema (the main document structure)
+        root_schema = normalized.get('root', {})
+        
+        # Generate and apply MongoDB validator
+        validator = to_mongo_validator(root_schema)
+        self.mongo.create_validator(collection_name, validator)
+        
+        # Insert the complete original data as a single document
+        docs_inserted = self._insert_data_to_collection(collection_name, root_schema, original_data)
+        
+        # Extract field information from root schema
+        fields = []
+        for field_name, field_info in root_schema.get('properties', {}).items():
+            field_type = field_info.get('type', 'string')
+            fields.append({
+                'name': field_name,
+                'type': field_type,
+                'required': field_name in root_schema.get('required', [])
             })
         
-        # Return only collection info (no credentials)
+        # Generate sample MongoDB queries using original data
+        all_queries = []
+        
+        if original_data:
+            # 1. insertOne query - show the complete document that was inserted
+            insert_doc = QueryGenerator.prepare_mongodb_document(root_schema, original_data)
+            if insert_doc:
+                all_queries.append({
+                    'type': 'insertOne',
+                    'collection': collection_name,
+                    'operation': f'db.{collection_name}.insertOne(...)',
+                    'document': insert_doc
+                })
+            
+            # 2. find query - use first available field for filter
+            if isinstance(original_data, dict) and original_data:
+                first_key = list(original_data.keys())[0]
+                first_value = original_data[first_key]
+                
+                # Create a simple filter based on first nested field
+                if isinstance(first_value, dict) and first_value:
+                    nested_key = list(first_value.keys())[0]
+                    nested_value = first_value[nested_key]
+                    filter_obj = {first_key: {nested_key: nested_value}} if not isinstance(nested_value, (dict, list)) else {first_key: first_value}
+                else:
+                    filter_obj = {first_key: first_value}
+                
+                all_queries.append({
+                    'type': 'find',
+                    'collection': collection_name,
+                    'operation': f'db.{collection_name}.find(...)',
+                    'filter': filter_obj
+                })
+            
+            # 3. updateOne query
+            if isinstance(original_data, dict) and len(original_data) >= 2:
+                first_key = list(original_data.keys())[0]
+                second_key = list(original_data.keys())[1]
+                
+                all_queries.append({
+                    'type': 'updateOne',
+                    'collection': collection_name,
+                    'operation': f'db.{collection_name}.updateOne(...)',
+                    'filter': {first_key: original_data[first_key]},
+                    'update': {'$set': {second_key: original_data[second_key]}}
+                })
+        
+        collections_info = [{
+            'collection_name': collection_name,
+            'fields': fields,
+            'documents_inserted': docs_inserted
+        }]
+        
+        # Return collection info with sample queries (limit to first 3 queries)
         return {
             'schema_type': 'nosql',
             'collections': collections_info,
+            'queries': all_queries[:3],
             'status': 'success'
         }

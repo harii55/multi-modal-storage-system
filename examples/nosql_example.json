@@ -1,0 +1,103 @@
+{
+  "user": {
+    "profile": {
+      "personal": {
+        "name": "Alice Johnson",
+        "age": 30,
+        "contact": {
+          "email": "alice@example.com",
+          "phone": {
+            "primary": "123-456-7890",
+            "secondary": "098-765-4321"
+          },
+          "address": {
+            "street": "123 Main St",
+            "city": "Mumbai",
+            "state": "Maharashtra",
+            "country": "India",
+            "postal_code": "400001"
+          }
+        }
+      },
+      "preferences": {
+        "theme": "dark",
+        "language": "en",
+        "notifications": {
+          "email": true,
+          "sms": false,
+          "push": true
+        }
+      }
+    },
+    "activity": {
+      "last_login": "2025-11-16T10:30:00Z",
+      "session_count": 42,
+      "devices": [
+        {
+          "type": "mobile",
+          "os": "iOS",
+          "version": "17.1",
+          "last_used": "2025-11-16T10:30:00Z"
+        },
+        {
+          "type": "desktop",
+          "os": "macOS",
+          "version": "14.1",
+          "last_used": "2025-11-15T14:20:00Z"
+        }
+      ]
+    }
+  },
+  "orders": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "items": [
+        {
+          "product_id": "prod_123",
+          "name": "Laptop",
+          "quantity": 1,
+          "price": 75000.00,
+          "specifications": {
+            "brand": "Apple",
+            "model": "MacBook Pro",
+            "ram": "16GB",
+            "storage": "512GB SSD"
+          }
+        },
+        {
+          "product_id": "prod_456",
+          "name": "Mouse",
+          "quantity": 2,
+          "price": 1500.00
+        }
+      ],
+      "total": 78000.00,
+      "status": "delivered",
+      "payment": {
+        "method": "credit_card",
+        "transaction_id": "txn_abc123",
+        "status": "completed"
+      },
+      "shipping": {
+        "address": {
+          "street": "456 Oak Ave",
+          "city": "Pune",
+          "state": "Maharashtra",
+          "country": "India"
+        },
+        "tracking_number": "TRACK123456",
+        "delivered_at": "2025-11-10T15:30:00Z"
+      }
+    }
+  ],
+  "metadata": {
+    "account_created": "2023-01-15T08:00:00Z",
+    "account_type": "premium",
+    "subscription": {
+      "plan": "annual",
+      "price": 9999.00,
+      "next_billing": "2026-01-15T00:00:00Z",
+      "features": ["priority_support", "unlimited_storage", "advanced_analytics"]
+    }
+  }
+}

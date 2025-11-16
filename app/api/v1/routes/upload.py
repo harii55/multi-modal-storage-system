@@ -33,7 +33,7 @@ async def upload_handler(
     detected_type = detector.detect(file.filename, file_bytes)
 
     if detected_type == "json":
-        result = json_processor.process(file_bytes)
+        result = json_processor.process(file_bytes, user_id=user_id)
         return {"type": "json", "result": result}
 
     elif detected_type == "media":
