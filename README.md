@@ -20,17 +20,32 @@ Your custom scoring-based algorithm classifies JSON data:
 - **NoSQL**: Generates MongoDB JSON Schema validators
 - Semantic type detection: UUID, datetime, email, URL, etc.
 
-### 4. **Schema Evolution**
+### 4. **Query Generation**
+- **SQL**: Auto-generates INSERT, SELECT, UPDATE queries with parameterized values
+- **NoSQL**: Auto-generates insertOne, find, updateOne operations with sample documents
+- Returns 1-3 sample queries per upload showing how to interact with created schemas
+- Uses actual data from uploaded JSON as sample values
+
+### 5. **User Isolation (NoSQL)**
+- **Collection Per User**: Each user gets their own MongoDB collection (e.g., `alice_123`, `bob_456`)
+- Pass `user_id` parameter to create user-specific collections
+- Default collection name: `anonymous` (if no user_id provided)
+- Complete data isolation between users
+
+### 6. **Schema Evolution**
 - **ALTER TABLE**: Adds new columns when compatible
 - **Versioning**: Creates new versioned tables (e.g., `users_v2`) when incompatible
 - **MongoDB Validators**: Automatically applies or updates collection validators
 
-### 5. **Media Storage**
-- Uploads non-JSON files to MinIO object storage
+### 7. **Media Storage with Organization**
+- Uploads non-JSON files to MinIO with folder organization
+- **User-based folders**: `users/{user_id}/`
+- **Category folders**: `images/`, `documents/`, `audio/`, `video/`, `archives/`
+- **ZIP extraction**: Auto-extracts and categorizes each file individually
 - Returns presigned URLs for secure access
 - Content-type detection and metadata tracking
 
-### 6. **User Management**
+### 8. **User Management**
 - Simple registration endpoint with bcrypt password hashing
 - PostgreSQL-backed user storage
 
@@ -129,7 +144,15 @@ POST /v1/upload
 Content-Type: multipart/form-data
 
 file: <your-file>
+user_id: <optional-user-identifier>  # For media organization and NoSQL collections
 ```
+
+**Parameters:**
+- `file`: The file to upload (JSON or media)
+- `user_id` (optional): 
+  - For **media**: Organizes files in `users/{user_id}/` folders
+  - For **NoSQL**: Uses as collection name (e.g., collection `alice_123`)
+  - Default: `anonymous`
 
 #### Response for JSON (SQL)
 ```json
@@ -137,14 +160,46 @@ file: <your-file>
   "type": "json",
   "result": {
     "schema_type": "sql",
-    "sql": {
-      "users": "CREATE TABLE IF NOT EXISTS \"users\" (...)"
-    },
-    "actions": [
+    "tables": [
       {
+        "table_name": "users",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "required": true
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": true
+          },
+          {
+            "name": "email",
+            "type": "email",
+            "required": true
+          }
+        ],
+        "rows_inserted": 1
+      }
+    ],
+    "queries": [
+      {
+        "type": "INSERT",
         "table": "users",
-        "action": "create",
-        "ddl": "CREATE TABLE..."
+        "query": "INSERT INTO \"users\" (\"id\", \"name\", \"email\") VALUES (%s, %s, %s)",
+        "sample_values": ["123", "John", "john@example.com"]
+      },
+      {
+        "type": "SELECT",
+        "table": "users",
+        "query": "SELECT \"id\", \"name\", \"email\" FROM \"users\" LIMIT 10"
+      },
+      {
+        "type": "UPDATE",
+        "table": "users",
+        "query": "UPDATE \"users\" SET \"name\" = %s WHERE \"id\" = %s",
+        "sample_values": ["John", "123"]
       }
     ],
     "status": "success"
@@ -152,25 +207,62 @@ file: <your-file>
 }
 ```
 
+**Note**: No database credentials are returned for security. Only schema metadata and sample queries. (For now)
+
 #### Response for JSON (NoSQL)
 ```json
 {
   "type": "json",
   "result": {
     "schema_type": "nosql",
-    "nosql": {
-      "root": {
-        "$jsonSchema": {
-          "bsonType": "object",
-          "properties": {...}
-        }
+    "collections": [
+      {
+        "collection_name": "alice_123",
+        "fields": [
+          {
+            "name": "user",
+            "type": "object",
+            "required": true
+          },
+          {
+            "name": "orders",
+            "type": "array",
+            "required": true
+          }
+        ],
+        "documents_inserted": 1
       }
-    },
-    "actions": [...],
+    ],
+    "queries": [
+      {
+        "type": "insertOne",
+        "collection": "alice_123",
+        "operation": "db.alice_123.insertOne(...)",
+        "document": {
+          "user": { "name": "Alice", "age": 30 },
+          "orders": [{"id": "550e8400", "total": 150.50}]
+        }
+      },
+      {
+        "type": "find",
+        "collection": "alice_123",
+        "operation": "db.alice_123.find(...)",
+        "filter": { "user": { "name": "Alice" } }
+      },
+      {
+        "type": "updateOne",
+        "collection": "alice_123",
+        "operation": "db.alice_123.updateOne(...)",
+        "filter": { "user": { "name": "Alice" } },
+        "update": { "$set": { "orders": [...] } }
+      }
+    ],
     "status": "success"
   }
 }
 ```
+
+**Note**: Collection name is based on `user_id` parameter. Each user gets their own collection.
 
 #### Response for Media
 ```json
@@ -191,39 +283,53 @@ file: <your-file>
 
 ### Test SQL Classification
 ```bash
+# Using example files
 curl -X POST http://localhost:8000/v1/upload \
-  -F "file=@test_sql.json"
+  -F "file=@examples/sql_example.json" \
+  -F "user_id=test_user"
 ```
 
-**test_sql.json**:
-```json
-[
-  {"id": 1, "name": "John", "age": 25},
-  {"id": 2, "name": "Jane", "age": 30}
-]
-```
+**See**: `examples/sql_example.json` for a complete SQL example (users, blogs, comments)
 
 ### Test NoSQL Classification
 ```bash
+# With user_id - creates collection named "alice_123"
 curl -X POST http://localhost:8000/v1/upload \
-  -F "file=@test_nosql.json"
+  -F "file=@examples/nosql_example.json" \
+  -F "user_id=alice_123"
+
+# Without user_id - creates collection named "anonymous"
+curl -X POST http://localhost:8000/v1/upload \
+  -F "file=@examples/nosql_example.json"
 ```
 
-**test_nosql.json**:
-```json
-{
-  "users": [
-    {"id": 1, "name": "John", "profile": {"age": 25}},
-    {"id": 2, "name": "Jane", "details": {"age": 30}, "extra": "field"}
-  ]
-}
-```
+**See**: `examples/nosql_example.json` for a complete NoSQL example (deep nesting, arrays, complex structure)
 
-### Test Media Upload
+### Test Media Upload with User Organization
 ```bash
+# Uploads to: users/john_doe/images/{uuid}_profile.jpg
 curl -X POST http://localhost:8000/v1/upload \
-  -F "file=@image.png"
+  -F "file=@profile.jpg" \
+  -F "user_id=john_doe"
+
+# Without user_id - uploads to: users/anonymous/images/{uuid}_profile.jpg
+curl -X POST http://localhost:8000/v1/upload \
+  -F "file=@profile.jpg"
 ```
+
+### Test ZIP Extraction
+```bash
+# Extracts all files and organizes by MIME type
+curl -X POST http://localhost:8000/v1/upload \
+  -F "file=@archive.zip" \
+  -F "user_id=john_doe"
+```
+
+**Result**: Files extracted to appropriate folders:
+- `users/john_doe/images/` - All image files
+- `users/john_doe/documents/` - All document files
+- `users/john_doe/audio/` - All audio files
+- etc.
 
 ## 📊 Classification Algorithm Details
 
@@ -253,7 +359,7 @@ multi-modal-storage-system/
 ├── app/
 │   ├── api/v1/routes/
 │   │   ├── register.py          # User registration
-│   │   └── upload.py            # File upload endpoint
+│   │   └── upload.py            # File upload endpoint (with user_id support)
 │   ├── db/
 │   │   ├── postgres/
 │   │   │   ├── client.py        # PostgreSQL client
@@ -261,23 +367,29 @@ multi-modal-storage-system/
 │   │   ├── mongo/
 │   │   │   └── client.py        # MongoDB client
 │   │   └── minio/
-│   │       └── client.py        # MinIO client
+│   │       └── client.py        # MinIO client with presigned URLs
 │   ├── services/
 │   │   ├── json_service/
 │   │   │   ├── processor.py     # Main JSON processor with YOUR algorithm
-│   │   │   ├── infer_type/      # Type inference
+│   │   │   ├── query_generator.py # Query generation (INSERT, SELECT, UPDATE, etc.)
+│   │   │   ├── infer_type/      # Type inference (UUID, datetime, email)
 │   │   │   ├── entity_extractor/ # Entity detection
 │   │   │   ├── normalizer/       # Schema normalization
 │   │   │   ├── table_generator/  # SQL/NoSQL generators
 │   │   │   └── schema_checker/   # Schema comparison & versioning
 │   │   └── media_service/
-│   │       └── processor.py     # Media processing
+│   │       └── processor.py     # Media processing (folder organization, ZIP extraction)
 │   └── utils/
 │       └── detectors/
 │           └── type_detector.py # JSON vs Media detection
+├── examples/
+│   ├── sql_example.json         # Example SQL classification input
+│   └── nosql_example.json       # Example NoSQL classification input
 ├── main.py
 ├── requirements.txt
-└── README.md
+├── README.md
+├── EXAMPLES.md                   # Detailed examples with expected responses
+└── RECENT_CHANGES.md             # Latest feature updates
 ```
 
 ## 🔧 Configuration
@@ -304,21 +416,31 @@ multi-modal-storage-system/
 2. **Best of Both Worlds**: Fast classification + Comprehensive schema generation
 3. **Production-Ready**: Handles schema evolution, versioning, and ALTER statements
 4. **Type-Smart**: Detects UUIDs, datetimes, emails, and URLs automatically
-5. **Database-Agnostic**: Generates schemas for both SQL and NoSQL simultaneously
+5. **Query Generation**: Automatically generates ready-to-use queries with sample data
+6. **User Isolation**: NoSQL collections are user-specific for complete data isolation
+7. **Organized Storage**: Media files organized by user and MIME type categories
+8. **Security First**: No database credentials in API responses
+9. **Complete Workflow**: From upload → classification → schema generation → data insertion → query examples
 
-## 🚧 Next Steps
+## � Additional Documentation
 
-- Add authentication/authorization
+- **[EXAMPLES.md](./EXAMPLES.md)** - Complete examples with expected responses for SQL and NoSQL classifications
+- **[RECENT_CHANGES.md](./RECENT_CHANGES.md)** - Latest feature updates (query generation, user collections, credential removal)
+- **[JSON_RESPONSE_FORMAT.md](./JSON_RESPONSE_FORMAT.md)** - Detailed API response format documentation
+- **[INTEGRATION_SUMMARY.md](./INTEGRATION_SUMMARY.md)** - Complete architecture and integration overview
+
+## �🚧 Next Steps
+
+- Add authentication/authorization with JWT
 - Implement async database operations
 - Add comprehensive test suite
 - Support for more complex relationships (foreign keys)
 - Add data validation before insertion
 - Support for batch uploads
 - Add logging and monitoring
-
-## 📝 License
-
-MIT
+- Rate limiting and request throttling
+- Support for schema migrations
+- Add GraphQL API layer
 
 ## 👤 Author
 
@@ -326,4 +448,4 @@ MIT
 
 ---
 
-**Built with ❤️ using FastAPI, PostgreSQL, MongoDB, and MinIO**
+**Built using FastAPI, PostgreSQL, MongoDB, and MinIO**
