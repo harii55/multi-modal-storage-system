@@ -1,0 +1,17 @@
+{
+  "users": [
+    {
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "username": "admin",
+      "email": "admin@example.com"
+    }
+  ],
+  "posts": [
+    {
+      "post_id": 1,
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "title": "First Post",
+      "content": "Hello World"
+    }
+  ]
+}
