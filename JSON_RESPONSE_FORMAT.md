@@ -142,6 +142,25 @@ The system now:
         "rows_inserted": 1
       }
     ],
+    "queries": [
+      {
+        "type": "INSERT",
+        "table": "users",
+        "query": "INSERT INTO \"users\" (\"id\", \"username\", \"email\", \"created_at\") VALUES (%s, %s, %s, %s)",
+        "sample_values": ["usr_67f8a1c9", "priya_sharma", "priya.sharma@example.in", "2025-11-16T06:27:15.342Z"]
+      },
+      {
+        "type": "SELECT",
+        "table": "users",
+        "query": "SELECT \"id\", \"username\", \"email\", \"created_at\" FROM \"users\" LIMIT 10"
+      },
+      {
+        "type": "UPDATE",
+        "table": "users",
+        "query": "UPDATE \"users\" SET \"username\" = %s WHERE \"id\" = %s",
+        "sample_values": ["priya_sharma", "usr_67f8a1c9"]
+      }
+    ],
     "status": "success"
   }
 }
@@ -199,6 +218,58 @@ The system now:
           }
         ],
         "documents_inserted": 1
+      }
+    ],
+    "queries": [
+      {
+        "type": "insertOne",
+        "collection": "root",
+        "operation": "db.root.insertOne(...)",
+        "document": {
+          "user": {
+            "profile": {
+              "name": "Alice",
+              "contact": {
+                "email": "alice@example.com",
+                "phone": {
+                  "primary": "123-456-7890"
+                }
+              }
+            }
+          },
+          "orders": [
+            {
+              "id": "550e8400-e29b-41d4-a716-446655440000",
+              "items": ["item1", "item2"],
+              "total": 150.50
+            }
+          ]
+        }
+      },
+      {
+        "type": "find",
+        "collection": "root",
+        "operation": "db.root.find(...)",
+        "filter": {
+          "id": "550e8400-e29b-41d4-a716-446655440000"
+        }
+      },
+      {
+        "type": "updateOne",
+        "collection": "root",
+        "operation": "db.root.updateOne(...)",
+        "filter": {
+          "id": "550e8400-e29b-41d4-a716-446655440000"
+        },
+        "update": {
+          "$set": {
+            "user": {
+              "profile": {
+                "name": "Alice"
+              }
+            }
+          }
+        }
       }
     ],
     "status": "success"
